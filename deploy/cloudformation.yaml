@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Rivet - Compliance-First AI Advertising Platform on AWS (WeMakeDevs x AWS Hackathon 2026)'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: 'production'
+    Description: 'Deployment environment'
+  
+  S3BucketName:
+    Type: String
+    Default: 'rivet-campaigns-audit-ledger'
+    Description: 'Name of the S3 bucket for brand assets and immutable audit receipts'
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # S3 Bucket for Immutable Audit Receipts & Campaign Assets
+  # ---------------------------------------------------------------------------
+  RivetAuditBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${S3BucketName}-${AWS::AccountId}-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST, HEAD]
+            AllowedOrigins: ['*']
+            MaxAge: 3600
+
+  # ---------------------------------------------------------------------------
+  # IAM Role for Rivet with Least-Privilege S3 & Amazon Bedrock Access
+  # ---------------------------------------------------------------------------
+  RivetServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - build.apprunner.amazonaws.com
+                - tasks.ecs.amazonaws.com
+                - ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RivetCloudPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 Access to Audit Ledger
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:PutObjectTagging
+                  - s3:GetObjectTagging
+                Resource:
+                  - !Sub 'arn:aws:s3:::${RivetAuditBucket}'
+                  - !Sub 'arn:aws:s3:::${RivetAuditBucket}/*'
+              # Amazon Bedrock Foundation Model Access
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:ListFoundationModels
+                Resource: '*'
+
+  # ---------------------------------------------------------------------------
+  # Instance Profile (for EC2 / ECS deployments)
+  # ---------------------------------------------------------------------------
+  RivetInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref RivetServiceRole
+
+Outputs:
+  AuditBucketName:
+    Description: 'S3 Bucket storing immutable campaign audit receipts'
+    Value: !Ref RivetAuditBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-AuditBucket'
+
+  ServiceRoleArn:
+    Description: 'IAM Role ARN for Rivet App Runner / ECS task'
+    Value: !GetAtt RivetServiceRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ServiceRoleArn'

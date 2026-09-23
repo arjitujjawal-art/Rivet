@@ -1,0 +1,93 @@
+[project]
+name = "rivet"
+version = "0.1.0"
+description = "Compliance-first, verification-based AI advertising platform on AWS"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "sqlmodel>=0.0.22",
+    "pillow>=12.0",
+    "typer>=0.15",
+    "sse-starlette>=2.1",
+    "python-multipart>=0.0.12",
+    "numpy>=2.0",
+    "boto3>=1.34.0",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "torch",
+    "torchvision",
+    "diffusers",
+    "transformers",
+    "accelerate",
+    "safetensors",
+    "soundfile",
+    "numpy",
+    "kokoro",
+    "spacy",
+    # Kokoro's grapheme-to-phoneme step pip-installs this model on first use if it
+    # is absent, which breaks any offline or restricted-network run mid-generation.
+    # Pinning it here makes narration self-contained after install.
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    # Kokoro reaches for a different grapheme-to-phoneme chain per language and pulls
+    # these in at first use, which fails offline and mid-generation.
+    "misaki[zh]",
+    "ordered_set",
+]
+
+[project.scripts]
+rivet = "cli.main:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.27",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# The spaCy model is published as a GitHub release asset, not on PyPI.
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["rivet", "cli", "services"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends"]
+
+[tool.ruff.lint.per-file-ignores]
+"rivet/pipeline/runner.py" = ["BLE001"]
+"rivet/audit/semantic.py" = ["BLE001"]
+"rivet/adapters/qwen_planner.py" = ["BLE001"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["rivet", "cli", "services"]
+
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["transformers.*", "soundfile", "diffusers.*", "accelerate.*", "kokoro.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]

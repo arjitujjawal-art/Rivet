@@ -1,0 +1,90 @@
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+
+from rivet.adapters.heuristic_planner import propose_shots
+from rivet.adapters.qwen_planner import propose_shots_vlm
+from rivet.domain.models import PlanValidationError, Project, ShotPlan
+from rivet.domain.states import ProjectStatus
+from rivet.storage.assets import AssetStore
+from rivet.storage.plans import PlanStore
+from rivet.storage.projects import ProjectStore
+from services.api.deps import get_asset_store, get_plan_store, get_project_store
+
+router = APIRouter(prefix="/api/projects", tags=["plan"])
+
+WRITABLE_STATUSES = (ProjectStatus.BRAND_READY, ProjectStatus.PLANNED)
+
+
+class PlanResponse(BaseModel):
+    shots: list[ShotPlan]
+
+
+def _require_writable(project: Project) -> None:
+    if project.status not in WRITABLE_STATUSES:
+        raise HTTPException(status_code=409, detail="plan is frozen after generation starts")
+
+
+@router.post("/{project_id}/plan")
+def derive_plan(
+    project_id: str,
+    request: Request,
+    projects: ProjectStore = Depends(get_project_store),
+    plans: PlanStore = Depends(get_plan_store),
+    assets: AssetStore = Depends(get_asset_store),
+) -> PlanResponse:
+    project = projects.get(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    _require_writable(project)
+    dna = projects.get_brand_dna(project_id)
+    if dna is None or dna.confirmed_at is None:
+        raise HTTPException(status_code=409, detail="confirmed brand dna required")
+    product = assets.get(dna.product_asset_id)
+    writer = getattr(request.app.state, "scene_writer", None)
+    if product is not None and Path(product.path).is_file():
+        shots = propose_shots_vlm(
+            dna, project.campaign_seed, product.path, project.brief or "", writer
+        )
+    else:
+        shots = propose_shots(dna, project.campaign_seed)
+    plans.set_plan(project_id, shots)
+    return PlanResponse(shots=shots)
+
+
+@router.put("/{project_id}/shots/{shot_id}")
+def edit_shot(
+    project_id: str,
+    shot_id: str,
+    shot: ShotPlan,
+    projects: ProjectStore = Depends(get_project_store),
+    plans: PlanStore = Depends(get_plan_store),
+) -> PlanResponse:
+    project = projects.get(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    _require_writable(project)
+    if shot.shot_id != shot_id:
+        raise HTTPException(status_code=422, detail="shot id mismatch")
+    try:
+        shots = plans.update_shot(project_id, shot)
+    except LookupError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except PlanValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return PlanResponse(shots=shots)
+
+
+@router.get("/{project_id}/plan")
+def get_plan(
+    project_id: str,
+    projects: ProjectStore = Depends(get_project_store),
+    plans: PlanStore = Depends(get_plan_store),
+) -> PlanResponse:
+    if projects.get(project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    shots = plans.get_plan(project_id)
+    if shots is None:
+        raise HTTPException(status_code=404, detail="plan not set")
+    return PlanResponse(shots=shots)

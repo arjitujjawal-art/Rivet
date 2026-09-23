@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  rivet-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rivet-platform
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - RIVET_ENV=production
+      # AWS Cloud Credentials & Configuration
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-rivet-ad-campaigns}
+      - RIVET_BEDROCK_MODEL_ID=${RIVET_BEDROCK_MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}
+    volumes:
+      # Mount data directory for persistent local project caches and receipts
+      - rivet_data:/app/.rivet
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  rivet_data:
+    driver: local
